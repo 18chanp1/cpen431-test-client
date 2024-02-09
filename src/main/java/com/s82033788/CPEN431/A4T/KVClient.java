@@ -1,8 +1,13 @@
-package com.s82033788.CPEN431.A4T.wrappers;
+package com.s82033788.CPEN431.A4T;
 
 import com.s82033788.CPEN431.A4T.newProto.*;
+import com.s82033788.CPEN431.A4T.wrappers.ServerResponse;
+import com.s82033788.CPEN431.A4T.wrappers.TestValueWrapper;
+import com.s82033788.CPEN431.A4T.wrappers.UnwrappedMessage;
+import com.s82033788.CPEN431.A4T.wrappers.UnwrappedPayload;
 
 import java.io.IOException;
+import java.math.BigInteger;
 import java.net.*;
 import java.nio.ByteBuffer;
 import java.nio.ByteOrder;
@@ -12,11 +17,17 @@ import java.util.Arrays;
 import java.util.concurrent.Callable;
 import java.util.zip.CRC32;
 
-public class KVClient implements Callable<Boolean> {
+public class KVClient implements Callable<Integer> {
     private InetAddress serverAddress;
     private int serverPort;
     private DatagramSocket socket;
     byte[] publicBuf;
+    int testSequence;
+
+    /* Test Result codes */
+    public final static int TEST_FAILED = 0;
+    public final static int TEST_PASSED = 1;
+    public final static int TEST_UNDECIDED = 2;
 
     /* Request Codes */
     public final static int REQ_CODE_PUT = 0x01;
@@ -48,69 +59,650 @@ public class KVClient implements Callable<Boolean> {
         socket.setSoTimeout(100);
     }
 
-    @Override
-    public Boolean call() throws Exception {
-        return isAlive() && getPID();
+    public KVClient(InetAddress serverAddress, int serverPort, DatagramSocket socket, byte[] publicBuf, int testSequence) {
+        this.serverAddress = serverAddress;
+        this.serverPort = serverPort;
+        this.socket = socket;
+        this.publicBuf = publicBuf;
+        this.testSequence = testSequence;
     }
 
-    private boolean getPID() throws NoSuchAlgorithmException, IOException {
+    @Override
+    public Integer call() throws Exception {
+        return memoryTest();
+    }
+
+    /* Different sequences of tests*/
+    public int basicOperationsTest() throws IOException {
+        System.out.println("Basic Operations Test. PUT -> GET -> REMOVE -> GET -> REMOVE -> PUT -> GET");
+
+        /* Generate some random values for key, value, and version */
+        byte[] key =  new byte[32];
+        byte[] value = new byte[64];
+        int version;
+
+        try {
+            SecureRandom.getInstanceStrong().nextBytes(key);
+            SecureRandom.getInstanceStrong().nextBytes(value);
+            version = SecureRandom.getInstanceStrong().nextInt();
+        } catch (NoSuchAlgorithmException e) {
+            System.out.println("Unable to generate random items. Aborting");
+            return TEST_UNDECIDED;
+        }
+
+        /* PUT operation */
+        ServerResponse p;
+        System.out.println("Getting value 1");
+        try {
+            p = put(key, value, version);
+        } catch (Exception e) {
+            return handleException(e);
+        }
+
+        if(p.getErrCode() != RES_CODE_SUCCESS){
+            System.out.println("PUT failed with error code: " + p.getErrCode());
+            return TEST_FAILED;
+        }
+
+        /* GET Operation. */
+        System.out.println("Putting value 1");
+        ServerResponse g1;
+        try {
+            g1 = get(key);
+        } catch (Exception e) {
+            return handleException(e);
+        }
+
+        if(g1.getErrCode() != RES_CODE_SUCCESS){
+            System.out.println("GET failed with error code: " + p.getErrCode());
+            return TEST_FAILED;
+        }
+
+        if (!Arrays.equals(g1.getValue(), value)) {
+            System.out.println("GET value did not match. Put: " + value + " Get: " + g1.getValue());
+            return TEST_FAILED;
+        }
+
+        if (g1.getVersion() != version) {
+            System.out.println("GET version did not match. Put: " + value + " Get: " + g1.getValue());
+            return TEST_FAILED;
+        }
+
+        /* delete Operation*/
+        System.out.println("Deleting value 1");
+        ServerResponse d1;
+        try {
+            d1 = delete(key);
+        } catch (Exception e) {
+            return handleException(e);
+        }
+
+        if(d1.getErrCode() != RES_CODE_SUCCESS){
+            System.out.println("DEL failed with error code: " + p.getErrCode());
+            return TEST_FAILED;
+        }
+
+        /* GET Operation */
+        System.out.println("Getting non existent value");
+        ServerResponse g2;
+        try {
+            g2 = get(key);
+        } catch (Exception e) {
+            return handleException(e);
+        }
+
+        if(g2.getErrCode() != RES_CODE_NO_KEY){
+            System.out.println("GET did not return no key. Error Code:" + p.getErrCode());
+            return TEST_FAILED;
+        }
+
+        /* DEL operation*/
+        ServerResponse d2;
+        System.out.println("Deleting non existent value");
+        try {
+            d2 = delete(key);
+        } catch (Exception e) {
+            return handleException(e);
+        }
+
+        if(d2.getErrCode() != RES_CODE_NO_KEY){
+            System.out.println("DEL did not return no key. Error Code:" + p.getErrCode());
+            return TEST_FAILED;
+        }
+
+        /* PUT operation, with new values */
+        ServerResponse p2;
+        System.out.println("Putting value 2");
+        try {
+            SecureRandom.getInstanceStrong().nextBytes(value);
+        } catch (NoSuchAlgorithmException e) {
+            System.out.println("Unable to generate random items. Aborting");
+            return TEST_UNDECIDED;
+        }
+        version += 20;
+
+        try {
+            p2 = put(key, value, version);
+        } catch (Exception e) {
+            return handleException(e);
+        }
+
+        if(p2.getErrCode() != RES_CODE_SUCCESS){
+            System.out.println("PUT failed with error code: " + p.getErrCode());
+            return TEST_FAILED;
+        }
+
+        /* GET Operation */
+        ServerResponse g3;
+        System.out.println("Get value 2");
+        try {
+            g3 = get(key);
+        } catch (Exception e) {
+            return handleException(e);
+        }
+
+        if(g3.getErrCode() != RES_CODE_SUCCESS){
+            System.out.println("GET failed with error code: " + p.getErrCode());
+            return TEST_FAILED;
+        }
+
+        if (!Arrays.equals(g3.getValue(), value)) {
+            System.out.println("GET value did not match. Put: " + value + " Get: " + g3.getValue());
+            return TEST_FAILED;
+        }
+
+        if (g3.getVersion() != version) {
+            System.out.println("GET version did not match. Put: " + value + " Get: " + g3.getValue());
+            return TEST_FAILED;
+        }
+
+
+        System.out.println("Basic Operations Test complete");
+        System.out.println("***PASSED***");
+        return TEST_PASSED;
+    }
+
+    public int memoryTest() throws IOException {
+        System.out.println("Memory Violation Test PUT. PUT->GET Closed Loop, 10kbytes");
+
+        System.out.println("Performing WIPEOUT");
+        ServerResponse w;
+        try {
+            w = wipeout();
+        } catch (Exception e) {
+            return handleException(e);
+        }
+
+        if(w.getErrCode() != RES_CODE_SUCCESS) {
+            System.out.println("Unable to wipeout");
+            return TEST_FAILED;
+        }
+
+
+
+        BigInteger i = BigInteger.ZERO;
+        byte[] value = new byte[10000];
+
+        try {
+            SecureRandom.getInstanceStrong().nextBytes(value);
+        } catch (NoSuchAlgorithmException e) {
+            System.out.println("Unable to generate random items. Aborting");
+            return TEST_UNDECIDED;
+        }
+
+        ServerResponse p;
+        try {
+            p = put(i.toByteArray(), value,0);
+        } catch (Exception e) {
+            return handleException(e);
+        }
+
+        if(p.getErrCode() != RES_CODE_SUCCESS) {
+            System.out.println("Unable to put first item. Aborting");
+            return TEST_FAILED;
+        }
+
+        ServerResponse g;
+        do {
+            try {
+                g = get(i.toByteArray());
+            } catch (Exception e) {
+                return handleException(e);
+            }
+
+            if(!Arrays.equals(g.getValue(), value)){
+                System.out.println("GET value did not match. Put: " + value + " Get: " + g.getValue());
+                return TEST_FAILED;
+            }
+
+            i = i.add(BigInteger.ONE);
+            try {
+                SecureRandom.getInstanceStrong().nextBytes(value);
+            } catch (NoSuchAlgorithmException e) {
+                System.out.println("Unable to generate random items. Aborting");
+                return TEST_UNDECIDED;
+            }
+
+            try {
+                p = put(i.toByteArray(), value,0);
+            } catch (Exception e) {
+                return handleException(e);
+            }
+        } while (p.getErrCode() == RES_CODE_SUCCESS || i.longValue()> 6710);
+
+        if(p.getErrCode() != RES_CODE_NO_MEM) {
+            System.out.println("Error occurred. Error Code: " + p.getErrCode() );
+            return TEST_FAILED;
+        }
+
+        if(i.longValue() > 6710){
+            System.out.println("Memory capacity exceeded.");
+            return TEST_FAILED;
+        }
+
+        System.out.println("Closed loops:" + i.longValue());
+        System.out.println("System Memory: " + (i.longValue() * 10000) / 1048576F + "MiB");
+        System.out.println("***PASSED***");
+
+        return TEST_PASSED;
+    }
+    public int illegalKVTest() throws IOException {
+        System.out.println("Illegal KV Test.");
+        System.out.println("PUT (illegal key) -> PUT (illegal value)");
+        System.out.println("-> GET (Illegal Key) -> DELETE (Illegal Key)");
+
+        byte[] key = new byte[16];
+        byte[] illegalKey = new byte[64];
+        byte[] value = new byte[64];
+        byte[] illegalValue = new byte[10001];
+        int version;
+
+        try {
+            SecureRandom.getInstanceStrong().nextBytes(key);
+            SecureRandom.getInstanceStrong().nextBytes(illegalKey);
+            SecureRandom.getInstanceStrong().nextBytes(value);
+            SecureRandom.getInstanceStrong().nextBytes(illegalValue);
+            version = SecureRandom.getInstanceStrong().nextInt();
+        } catch (NoSuchAlgorithmException e) {
+            System.out.println("Unable to generate random items. Aborting");
+            return TEST_UNDECIDED;
+        }
+
+        ServerResponse p1;
+        System.out.println("Putting Illegal Key");
+        try {
+            p1 = put(illegalKey, value, version);
+        } catch (Exception e) {
+            return handleException(e);
+        }
+
+        if(p1.getErrCode() != RES_CODE_INVALID_KEY){
+            System.out.println("PUT did not return key too long. Error code: " + p1.getErrCode());
+            return TEST_FAILED;
+        }
+
+        ServerResponse p2;
+        System.out.println("Putting illegal value");
+        try {
+            p2 = put(key, illegalValue, version);
+        } catch (Exception e) {
+            return handleException(e);
+        }
+
+        if(p2.getErrCode() != RES_CODE_INVALID_VALUE){
+            System.out.println("PUT did not return value too long. Error code: " + p2.getErrCode());
+            return TEST_FAILED;
+        }
+
+        ServerResponse g;
+        System.out.println("Getting illegal key");
+        try {
+            g = get(illegalKey);
+        } catch (Exception e) {
+            return handleException(e);
+        }
+
+        if(g.getErrCode() != RES_CODE_INVALID_KEY){
+            System.out.println("GET did not return key too long. Error code: " + p2.getErrCode());
+            return TEST_FAILED;
+        }
+
+        ServerResponse d;
+        System.out.println("Deleting illegal key");
+        try {
+            d = get(illegalKey);
+        } catch (Exception e) {
+            return handleException(e);
+        }
+
+        if(d.getErrCode() != RES_CODE_INVALID_KEY){
+            System.out.println("PUT did not return key too long. Error code: " + p2.getErrCode());
+            return TEST_FAILED;
+        }
+
+        System.out.println("***PASSED***");
+        return TEST_PASSED;
+    }
+    public int basicWipeoutTest() throws IOException {
+        System.out.println("Basic Wipeout Test. PUT -> WIP -> GET -> REMOVE");
+
+        /* Generate some random values for key, value, and version */
+        byte[] key =  new byte[32];
+        byte[] value = new byte[64];
+        int version;
+
+        try {
+            SecureRandom.getInstanceStrong().nextBytes(key);
+            SecureRandom.getInstanceStrong().nextBytes(value);
+            version = SecureRandom.getInstanceStrong().nextInt();
+        } catch (NoSuchAlgorithmException e) {
+            System.out.println("Unable to generate random items. Aborting");
+            return TEST_UNDECIDED;
+        }
+
+        ServerResponse p;
+        System.out.println("Putting value 1");
+        try {
+            p = put(key, value, version);
+        } catch (Exception e) {
+            return handleException(e);
+        }
+
+        if(p.getErrCode() != RES_CODE_SUCCESS){
+            System.out.println("PUT failed with error code: " + p.getErrCode());
+            return TEST_FAILED;
+        }
+
+        /* delete Operation*/
+        System.out.println("Wiping out server");
+        ServerResponse w;
+        try {
+            w = wipeout();
+        } catch (Exception e) {
+            return handleException(e);
+        }
+
+        if(w.getErrCode() != RES_CODE_SUCCESS){
+            System.out.println("WIPEOUT failed with error code: " + p.getErrCode());
+            return TEST_FAILED;
+        }
+
+        /* GET Operation */
+        System.out.println("Getting non existent value");
+        ServerResponse g1;
+        try {
+            g1 = get(key);
+        } catch (Exception e) {
+            return handleException(e);
+        }
+
+        if(g1.getErrCode() != RES_CODE_NO_KEY){
+            System.out.println("GET did not return no key. Error Code:" + p.getErrCode());
+            return TEST_FAILED;
+        }
+
+        /* DEL operation*/
+        ServerResponse d;
+        System.out.println("Deleting non existent value");
+        try {
+            d = delete(key);
+        } catch (Exception e) {
+            return handleException(e);
+        }
+
+        if(d.getErrCode() != RES_CODE_NO_KEY){
+            System.out.println("DEL did not return no key. Error Code:" + p.getErrCode());
+            return TEST_FAILED;
+        }
+
+        /* PUT operation, with new values */
+        ServerResponse p2;
+        System.out.println("Putting value 2");
+        try {
+            SecureRandom.getInstanceStrong().nextBytes(value);
+        } catch (NoSuchAlgorithmException e) {
+            System.out.println("Unable to generate random items. Aborting");
+            return TEST_UNDECIDED;
+        }
+        version += 20;
+
+        try {
+            p2 = put(key, value, version);
+        } catch (Exception e) {
+            return handleException(e);
+        }
+
+        if(p2.getErrCode() != RES_CODE_SUCCESS){
+            System.out.println("PUT failed with error code: " + p.getErrCode());
+            return TEST_FAILED;
+        }
+
+        /* GET Operation */
+        ServerResponse g2;
+        System.out.println("Get value 2");
+        try {
+            g2 = get(key);
+        } catch (Exception e) {
+            return handleException(e);
+        }
+
+        if(g2.getErrCode() != RES_CODE_SUCCESS){
+            System.out.println("GET failed with error code: " + p.getErrCode());
+            return TEST_FAILED;
+        }
+
+        if (!Arrays.equals(g2.getValue(), value)) {
+            System.out.println("GET value did not match. Put: " + value + " Get: " + g2.getValue());
+            return TEST_FAILED;
+        }
+
+        if (g2.getVersion() != version) {
+            System.out.println("GET version did not match. Put: " + value + " Get: " + g2.getValue());
+            return TEST_FAILED;
+        }
+
+
+        System.out.println("Basic Wipeout Test complete");
+        System.out.println("***PASSED***");
+        return TEST_PASSED;
+    }
+
+    public int administrationTest() throws IOException {
+        System.out.println("Administration Test. PID -> ALI -> MEM -> SHU -> ALI");
+
+        /* Generate some random values for key, value, and version */
+
+        ServerResponse p;
+        System.out.println("Getting PID");
+        try {
+            p = getPID();
+        } catch (Exception e) {
+            return handleException(e);
+        }
+
+        if(p.getErrCode() != RES_CODE_SUCCESS){
+            System.out.println("PID failed with error code: " + p.getErrCode());
+            return TEST_FAILED;
+        }
+
+        System.out.println("Checking server is alive");
+        ServerResponse a;
+        try {
+            a = isAlive();
+        } catch (Exception e) {
+            return handleException(e);
+        }
+
+        if(a.getErrCode() != RES_CODE_SUCCESS){
+            System.out.println("ALI with error code: " + p.getErrCode());
+            return TEST_FAILED;
+        }
+
+        System.out.println("Checking Membership Count");
+        ServerResponse m;
+        try {
+            m = getMembershipCount();
+        } catch (Exception e) {
+            return handleException(e);
+        }
+
+        if(m.getErrCode() != RES_CODE_SUCCESS){
+            System.out.println("MEM with error code: " + p.getErrCode());
+            return TEST_FAILED;
+        }
+
+        if(m.getMembershipCount() != 1) {
+            System.out.println("MEM count mismatch. Count:" + p.getMembershipCount());
+            return TEST_FAILED;
+        }
+
+        try {
+            shutdown();
+        } catch (ServerTimedOutException e) {
+            System.out.println("Server shut down");
+        } catch (Exception e) {
+            return handleException(e);
+        }
+
+        try {
+            Thread.sleep(5000);
+        } catch (InterruptedException e) {
+            System.out.println("Sleep interrupted");
+            return TEST_UNDECIDED;
+        }
+
+        //Test isAlive
+        try {
+            isAlive();
+        } catch (ServerTimedOutException e) {
+            System.out.println("Server is not alive after shutdown");
+            System.out.println("***PASSED***");
+            return TEST_PASSED;
+        } catch (Exception e) {
+            return handleException(e);
+        }
+
+        System.out.println("Server is still alive");
+        return TEST_FAILED;
+    }
+
+
+   /* Helper functions corresponding to each type of request */
+    private void shutdown() throws IOException, InterruptedException, ServerTimedOutException, MissingValuesException {
+        /* Generate isAlive Message */
+        UnwrappedPayload pl = new UnwrappedPayload();
+        pl.setCommand(REQ_CODE_SHU);
+
+        System.out.println("Sleeping for 5s");
+        Thread.sleep(5000);
+
+
+        sendAndReceiveServerResponse(pl);
+    }
+    private ServerResponse wipeout() throws IOException, ServerTimedOutException, MissingValuesException, InterruptedException {
+        /* Generate isAlive Message */
+        UnwrappedPayload pl = new UnwrappedPayload();
+        pl.setCommand(REQ_CODE_WIP);
+
+
+        return sendAndReceiveServerResponse(pl);
+    }
+    private ServerResponse delete(byte[] key) throws IOException, ServerTimedOutException, MissingValuesException, InterruptedException {
+        /* Generate isAlive Message */
+        UnwrappedPayload pl = new UnwrappedPayload();
+        pl.setCommand(REQ_CODE_DEL);
+        pl.setKey(key);
+
+
+        return sendAndReceiveServerResponse(pl);
+    }
+    private ServerResponse get(byte[] key) throws IOException, MissingValuesException, ServerTimedOutException, InterruptedException {
+        /* Generate isAlive Message */
+        UnwrappedPayload pl = new UnwrappedPayload();
+        pl.setCommand(REQ_CODE_GET);
+        pl.setKey(key);
+
+
+        ServerResponse res = sendAndReceiveServerResponse(pl);
+
+        if(res.getErrCode() == RES_CODE_SUCCESS && !res.hasValue())
+            throw new MissingValuesException("Value");
+
+        if(res.getErrCode() == RES_CODE_SUCCESS && !res.hasVersion())
+            throw new MissingValuesException("Version");
+
+        return res;
+    }
+    private ServerResponse put(byte[] key, byte[] value, int version) throws IOException, ServerTimedOutException, MissingValuesException, InterruptedException {
+        /* Generate isAlive Message */
+        UnwrappedPayload pl = new UnwrappedPayload();
+        pl.setCommand(REQ_CODE_PUT);
+        pl.setKey(key);
+        pl.setValue(value);
+        pl.setVersion(version);
+
+        return sendAndReceiveServerResponse(pl);
+    }
+    private ServerResponse getMembershipCount() throws IOException, MissingValuesException, ServerTimedOutException, InterruptedException {
+        /* Generate isAlive Message */
+        UnwrappedPayload pl = new UnwrappedPayload();
+        pl.setCommand(REQ_CODE_MEM);
+
+        ServerResponse res = sendAndReceiveServerResponse(pl);
+
+        if(res.getErrCode() == RES_CODE_SUCCESS && !res.hasMembershipCount())
+            throw new MissingValuesException("Membership Count");
+
+        return res;
+    }
+    private ServerResponse getPID() throws IOException, ServerTimedOutException, MissingValuesException, InterruptedException {
         /* Generate isAlive Message */
         UnwrappedPayload pl = new UnwrappedPayload();
         pl.setCommand(REQ_CODE_PID);
 
-        UnwrappedMessage msg = generateMessage(pl);
-        byte[] msgb = KVMsgSerializer.serialize(msg);
-        DatagramPacket p = new DatagramPacket(msgb, msgb.length, serverAddress, serverPort);
+        ServerResponse res = sendAndReceiveServerResponse(pl);
 
-        socket.send(p);
+        if(res.getErrCode() == RES_CODE_SUCCESS && !res.hasPid())
+            throw new MissingValuesException("PID");
 
-        ServerResponse res;
-        try {
-            res = receiveServerResponse(msg);
-        } catch (ServerTimedOutException e) {
-            System.out.println("Server timed out, aborting");
-            return false;
-        }
-
-        if (res.errcode != RES_CODE_SUCCESS) {
-            System.out.println("Server could not return the PID");
-            return false;
-        }
-
-        if(!res.hasPID) {
-            System.out.println("Server did not respond with the PID");
-            return false;
-        }
-
-        System.out.println("Server PID: " + res.getPid());
-        return true;
+        return res;
     }
-    private boolean isAlive() throws NoSuchAlgorithmException, IOException {
+    private ServerResponse isAlive() throws IOException, ServerTimedOutException, MissingValuesException, InterruptedException {
         /* Generate isAlive Message */
         UnwrappedPayload pl = new UnwrappedPayload();
         pl.setCommand(REQ_CODE_ALI);
 
+        return sendAndReceiveServerResponse(pl);
+    }
+
+    /* Utilities to generate and process outgoing and incoming packets following the retry and At most once policy */
+    private ServerResponse sendAndReceiveServerResponse(UnwrappedPayload pl) throws
+            IOException,
+            ServerTimedOutException,
+            InterruptedException,
+            MissingValuesException {
+        ServerResponse res;
+
         UnwrappedMessage msg = generateMessage(pl);
         byte[] msgb = KVMsgSerializer.serialize(msg);
         DatagramPacket p = new DatagramPacket(msgb, msgb.length, serverAddress, serverPort);
 
         socket.send(p);
+        res = receiveSingleServerResponse(msg);
 
-        ServerResponse res;
-        try {
-            res = receiveServerResponse(msg);
-        } catch (ServerTimedOutException e) {
-            System.out.println("Server timed out, aborting");
-            return false;
+       /* Send a new packet after overload time*/
+        while(res.getErrCode() == RES_CODE_OVERLOAD){
+            if(!res.hasOverloadWaitTime()) throw new MissingValuesException("Overload wait time");
+            Thread.sleep(res.getOverloadWaitTime());
+
+            msg = generateMessage(pl);
+            msgb = KVMsgSerializer.serialize(msg);
+            p = new DatagramPacket(msgb, msgb.length, serverAddress, serverPort);
+            socket.send(p);
+            res = receiveSingleServerResponse(msg);
         }
 
-        if (res.errcode != RES_CODE_SUCCESS) {
-            System.out.println("Server claims to be not alive, aborting");
-            return false;
-        }
-
-        System.out.println("Is alive test OK!");
-        return true;
+        return res;
     }
 
      byte[] generateMsgID() throws UnknownHostException {
@@ -153,7 +745,7 @@ public class KVClient implements Callable<Boolean> {
         return msg;
     }
 
-    ServerResponse receiveServerResponse(UnwrappedMessage req) throws ServerTimedOutException, IOException {
+    ServerResponse receiveSingleServerResponse(UnwrappedMessage req) throws ServerTimedOutException, IOException {
         DatagramPacket rP = new DatagramPacket(publicBuf, publicBuf.length);
 
         int tries = 0;
@@ -195,7 +787,7 @@ public class KVClient implements Callable<Boolean> {
 
 
         if(tries == 3 && !success) {
-            System.out.println("Did not receive response in time, aborting");
+            System.out.println("Did not receive response after 3 tries");
             throw new ServerTimedOutException();
         }
 
@@ -204,6 +796,32 @@ public class KVClient implements Callable<Boolean> {
         return plr;
     }
 
+    /* Exception Handler */
+    int handleException(Exception e) {
+        if (e instanceof ServerTimedOutException) {
+            System.out.println("Server timed out. Aborting");
+            return TEST_UNDECIDED;
+        } else if (e instanceof  MissingValuesException) {
+            System.out.println("Server response did not contain value: " + ((MissingValuesException)e).missingItem);
+            return TEST_FAILED;
+        } else if (e instanceof InterruptedException) {
+            System.out.println("Thread interrupted.");
+            return TEST_UNDECIDED;
+        } else {
+            e.printStackTrace();
+            return TEST_UNDECIDED;
+        }
+
+    }
+
+    /* Custom exceptions*/
     class ServerTimedOutException extends Exception{}
+    class MissingValuesException extends Exception{
+        public String missingItem;
+
+        public MissingValuesException(String missingItem) {
+            this.missingItem = missingItem;
+        }
+    }
 
 }

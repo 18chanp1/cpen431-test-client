@@ -1,31 +1,6 @@
 Starting Paco's Test Client
-Basic Operations Test. PUT -> GET -> REMOVE -> GET -> REMOVE -> PUT -> GET
-Getting value 1
-Putting value 1
-Deleting value 1
-Getting non existent value
-Deleting non existent value
-Putting value 2
-Get value 2
-Basic Operations Test complete
+Memory Violation Test PUT. PUT->GET Closed Loop, 10kbytes
+Performing WIPEOUT
+Closed loops:6082
+System Memory: 58.002472MiB
 ***PASSED***
-Basic Wipeout Test. PUT -> WIP -> GET -> REMOVE
-Putting value 1
-Wiping out server
-Getting non existent value
-Deleting non existent value
-Putting value 2
-Get value 2
-Basic Wipeout Test complete
-***PASSED***
-Administration Test. PID -> ALI -> MEM -> SHU -> ALI
-Getting PID
-Checking server is alive
-Checking Membership Count
-Sleeping for 5s
-Timed out
-Timed out
-Timed out
-Did not receive response in time, aborting
-Server is not alive after shutdown
-***TEST PASSED***

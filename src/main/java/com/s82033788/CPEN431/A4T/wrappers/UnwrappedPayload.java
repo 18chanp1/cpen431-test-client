@@ -1,6 +1,6 @@
-package com.s82033788.CPEN431.A4.wrappers;
+package com.s82033788.CPEN431.A4T.wrappers;
 
-import com.s82033788.CPEN431.A4.newProto.KVRequest;
+import com.s82033788.CPEN431.A4T.newProto.KVRequest;
 
 /**
  * A class than encapsulates the payload of an incoming requrest. Self Explanatory.
