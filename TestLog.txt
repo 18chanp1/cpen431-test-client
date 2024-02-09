@@ -1,6 +1,4 @@
 Starting Paco's Test Client
-Memory Violation Test PUT. PUT->GET Closed Loop, 10kbytes
-Performing WIPEOUT
-Closed loops:6082
-System Memory: 58.002472MiB
-***PASSED***
+Starting Thread Safe Test. PUT -> GET
+Closed loops: 62736
+*** TEST PASSED ***

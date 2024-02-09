@@ -2,7 +2,6 @@ package com.s82033788.CPEN431.A4T;
 
 import com.s82033788.CPEN431.A4T.newProto.*;
 import com.s82033788.CPEN431.A4T.wrappers.ServerResponse;
-import com.s82033788.CPEN431.A4T.wrappers.TestValueWrapper;
 import com.s82033788.CPEN431.A4T.wrappers.UnwrappedMessage;
 import com.s82033788.CPEN431.A4T.wrappers.UnwrappedPayload;
 
@@ -23,6 +22,7 @@ public class KVClient implements Callable<Integer> {
     private DatagramSocket socket;
     byte[] publicBuf;
     int testSequence;
+    UnwrappedMessage messageOnWire;
 
     /* Test Result codes */
     public final static int TEST_FAILED = 0;
@@ -69,7 +69,62 @@ public class KVClient implements Callable<Integer> {
 
     @Override
     public Integer call() throws Exception {
-        return memoryTest();
+        return threadSafeTest();
+    }
+
+    public int threadSafeTest() {
+        System.out.println("Starting Thread Safe Test. PUT -> GET");
+        ByteBuffer tidb = ByteBuffer.allocate(Long.BYTES);
+        tidb.putLong(Thread.currentThread().threadId());
+        tidb.flip();
+
+        byte[] key = tidb.array();
+        byte[] value = new byte[64];
+        int version = 0;
+
+        long end = System.currentTimeMillis() + 60000 ;
+        long i = 0;
+
+        while (System.currentTimeMillis() < end)
+        {
+            try {
+                SecureRandom.getInstanceStrong().nextBytes(value);
+                version = SecureRandom.getInstanceStrong().nextInt();
+            } catch (NoSuchAlgorithmException e) {
+                System.out.println("Unable to generate random items. Aborting");
+                return TEST_UNDECIDED;
+            }
+
+            ServerResponse p;
+            try {
+                p = put(key, value, version);
+            } catch (Exception e) {
+                return handleException(e);
+            }
+
+            ServerResponse g1;
+            try {
+                g1 = get(key);
+            } catch (Exception e) {
+                return handleException(e);
+            }
+
+            if(g1.getErrCode() != RES_CODE_SUCCESS){
+                System.out.println("GET failed with error code: " + p.getErrCode());
+                return TEST_FAILED;
+            }
+
+            if (!Arrays.equals(g1.getValue(), value)) {
+                System.out.println("GET value did not match. Put: " + value + " Get: " + g1.getValue());
+                return TEST_FAILED;
+            }
+            i++;
+        }
+
+
+        System.out.println("Closed loops: " + i);
+        System.out.println("*** TEST PASSED ***");
+        return TEST_PASSED;
     }
 
     /* Different sequences of tests*/
@@ -92,7 +147,7 @@ public class KVClient implements Callable<Integer> {
 
         /* PUT operation */
         ServerResponse p;
-        System.out.println("Getting value 1");
+        System.out.println("Putting value 1");
         try {
             p = put(key, value, version);
         } catch (Exception e) {
@@ -105,7 +160,7 @@ public class KVClient implements Callable<Integer> {
         }
 
         /* GET Operation. */
-        System.out.println("Putting value 1");
+        System.out.println("Getting value 1");
         ServerResponse g1;
         try {
             g1 = get(key);
@@ -219,6 +274,359 @@ public class KVClient implements Callable<Integer> {
 
         System.out.println("Basic Operations Test complete");
         System.out.println("***PASSED***");
+        return TEST_PASSED;
+    }
+
+    public int garbageTest() throws IOException {
+        System.out.println("Garbage resistance test");
+        byte[] garbage = new byte[13000];
+
+        try {
+            SecureRandom.getInstanceStrong().nextBytes(garbage);
+        } catch (NoSuchAlgorithmException e) {
+            System.out.println("Unable to generate random items. Aborting");
+            return TEST_UNDECIDED;
+        }
+
+        DatagramPacket d = new DatagramPacket(garbage, garbage.length, serverAddress, serverPort);
+        socket.send(d);
+
+        System.out.println("Checking server is alive");
+        ServerResponse a;
+        try {
+            a = isAlive();
+        } catch (Exception e) {
+            return handleException(e);
+        }
+
+        if(a.getErrCode() != RES_CODE_SUCCESS){
+            System.out.println("Server is allegedly dead." + a.getErrCode());
+            return TEST_FAILED;
+        }
+
+        System.out.println("*** PASSED ***");
+        return TEST_PASSED;
+    }
+
+
+    public int atMostOnceTest() throws IOException {
+        System.out.println("At most once Test. PUT -> DEL -> DEL");
+
+        /* Generate some random values for key, value, and version */
+        byte[] key =  new byte[32];
+        byte[] value = new byte[64];
+        int version;
+
+        try {
+            SecureRandom.getInstanceStrong().nextBytes(key);
+            SecureRandom.getInstanceStrong().nextBytes(value);
+            version = SecureRandom.getInstanceStrong().nextInt();
+        } catch (NoSuchAlgorithmException e) {
+            System.out.println("Unable to generate random items. Aborting");
+            return TEST_UNDECIDED;
+        }
+
+        /* PUT operation */
+        ServerResponse p;
+        System.out.println("Putting value 1");
+        try {
+            p = put(key, value, version);
+        } catch (Exception e) {
+            return handleException(e);
+        }
+
+        if(p.getErrCode() != RES_CODE_SUCCESS){
+            System.out.println("PUT failed with error code: " + p.getErrCode());
+            return TEST_FAILED;
+        }
+
+
+        /* delete Operation*/
+        System.out.println("Deleting value 1");
+        ServerResponse d1;
+        try {
+            d1 = delete(key);
+        } catch (Exception e) {
+            return handleException(e);
+        }
+
+        if(d1.getErrCode() != RES_CODE_SUCCESS){
+            System.out.println("DEL failed with error code: " + p.getErrCode());
+            return TEST_FAILED;
+        }
+
+        /* Delete Attempt 2*/
+        System.out.println("Deleting value 1 again");
+        ServerResponse d2;
+        try {
+            d2 = sendAndReceiveSingleServerResponse(messageOnWire);
+        } catch (Exception e) {
+            return handleException(e);
+        }
+
+        if (d2.getErrCode() == RES_CODE_NO_KEY) {
+            System.out.println("DEL At most once failed. Returned no key instead of previous response");
+            return TEST_FAILED;
+        }
+        else if(d2.getErrCode() != RES_CODE_SUCCESS){
+            System.out.println("DEL failed with error code: " + d2.getErrCode());
+            return TEST_FAILED;
+        }
+
+        System.out.println("*** Part 1 Passed ***");
+        try {
+            Thread.sleep(1000);
+        } catch (InterruptedException e) {
+            System.out.println("Sleep interrupted");
+            return TEST_UNDECIDED;
+        }
+
+        System.out.println("At most once Test2.  REM -> PUT -> REM (Same as first one)");
+
+        System.out.println("Performing WIPEOUT");
+        ServerResponse w;
+        try {
+            w = wipeout();
+        } catch (Exception e) {
+            return handleException(e);
+        }
+
+        if(w.getErrCode() != RES_CODE_SUCCESS) {
+            System.out.println("Unable to wipeout");
+            return TEST_FAILED;
+        }
+
+
+        /* delete Operation*/
+        System.out.println("Deleting value 1");
+        ServerResponse d3;
+        try {
+            d3 = delete(key);
+        } catch (Exception e) {
+            return handleException(e);
+        }
+
+        if(d3.getErrCode() != RES_CODE_NO_KEY){
+            System.out.println("DEL expected no key error: " + d3.getErrCode());
+            return TEST_FAILED;
+        }
+
+        UnwrappedMessage d3S = messageOnWire;
+
+        ServerResponse p2;
+        System.out.println("putting value 1");
+        try {
+            p2 = put(key, value, version);
+        } catch (Exception e) {
+            return handleException(e);
+        }
+
+        if(p2.getErrCode() != RES_CODE_SUCCESS){
+            System.out.println("PUT failed with error code: " + p2.getErrCode());
+            return TEST_FAILED;
+        }
+
+
+        System.out.println("Resend Deleting value 1");
+        ServerResponse d4;
+        try {
+            d4 = sendAndReceiveSingleServerResponse(d3S);
+        } catch (Exception e) {
+            return handleException(e);
+        }
+
+        if(d4.getErrCode() != RES_CODE_NO_KEY){
+            System.out.println("DEL expected no key error: " + d4.getErrCode());
+            return TEST_FAILED;
+        }
+
+        System.out.println("*** PART 2 PASS ***");
+
+        System.out.println("At most once test 3 PUT -> REM -> Many PUT -> REM");
+
+        try {
+            SecureRandom.getInstanceStrong().nextBytes(key);
+            SecureRandom.getInstanceStrong().nextBytes(value);
+            version = SecureRandom.getInstanceStrong().nextInt();
+        } catch (NoSuchAlgorithmException e) {
+            System.out.println("Unable to generate random items. Aborting");
+            return TEST_UNDECIDED;
+        }
+
+        ServerResponse p4;
+        System.out.println("Putting value 1");
+        try {
+            p4 = put(key, value, version);
+        } catch (Exception e) {
+            return handleException(e);
+        }
+
+        if(p4.getErrCode() != RES_CODE_SUCCESS){
+            System.out.println("PUT failed with error code: " + p4.getErrCode());
+            return TEST_FAILED;
+        }
+
+        System.out.println("Deleting value 1");
+        ServerResponse d5;
+        try {
+            d5 = delete(key);
+        } catch (Exception e) {
+            return handleException(e);
+        }
+
+        if(d5.getErrCode() != RES_CODE_SUCCESS){
+            System.out.println("DEL failed with error code: " + d5.getErrCode());
+            return TEST_FAILED;
+        }
+
+        UnwrappedMessage d5s = messageOnWire;
+
+        for(int i = 0; i < 30; i++) {
+            try {
+                SecureRandom.getInstanceStrong().nextBytes(key);
+                SecureRandom.getInstanceStrong().nextBytes(value);
+                version = SecureRandom.getInstanceStrong().nextInt();
+            } catch (NoSuchAlgorithmException e) {
+                System.out.println("Unable to generate random items. Aborting");
+                return TEST_UNDECIDED;
+            }
+
+            ServerResponse p5;
+            System.out.println("Putting value (random)");
+            try {
+                p5 = put(key, value, version);
+            } catch (Exception e) {
+                return handleException(e);
+            }
+
+            if(p5.getErrCode() != RES_CODE_SUCCESS){
+                System.out.println("PUT failed with error code: " + p5.getErrCode());
+                return TEST_FAILED;
+            }
+
+        }
+
+        System.out.println("Deleting value 1 (retry)");
+        ServerResponse d6;
+        try {
+            d6 = sendAndReceiveSingleServerResponse(d5s);
+        } catch (Exception e) {
+            return handleException(e);
+        }
+
+        if(d6.getErrCode() != RES_CODE_SUCCESS){
+            System.out.println("DEL failed with error code: " + d6.getErrCode());
+            return TEST_FAILED;
+        }
+
+        System.out.println("*** PART 3 PASS ***");
+
+        System.out.println("At most once test 4 PUT1 -> PUT2 -> PUT1 -> GET2");
+
+        try {
+            SecureRandom.getInstanceStrong().nextBytes(key);
+            SecureRandom.getInstanceStrong().nextBytes(value);
+            version = SecureRandom.getInstanceStrong().nextInt();
+        } catch (NoSuchAlgorithmException e) {
+            System.out.println("Unable to generate random items. Aborting");
+            return TEST_UNDECIDED;
+        }
+
+        ServerResponse p6;
+        System.out.println("Putting value 1");
+        try {
+            p6 = put(key, value, version);
+        } catch (Exception e) {
+            return handleException(e);
+        }
+
+        if(p6.getErrCode() != RES_CODE_SUCCESS){
+            System.out.println("PUT failed with error code: " + p6.getErrCode());
+            return TEST_FAILED;
+        }
+
+        UnwrappedMessage p6s = messageOnWire;
+
+
+        try {
+            SecureRandom.getInstanceStrong().nextBytes(value);
+            version = SecureRandom.getInstanceStrong().nextInt();
+        } catch (NoSuchAlgorithmException e) {
+            System.out.println("Unable to generate random items. Aborting");
+            return TEST_UNDECIDED;
+        }
+
+
+        ServerResponse p7;
+        System.out.println("Putting value 2");
+        try {
+            p7 = put(key, value, version);
+        } catch (Exception e) {
+            return handleException(e);
+        }
+
+        if(p7.getErrCode() != RES_CODE_SUCCESS){
+            System.out.println("PUT failed with error code: " + p7.getErrCode());
+            return TEST_FAILED;
+        }
+
+        byte[] val1 = Arrays.copyOf(value, value.length);
+        int v1 = version;
+
+        ServerResponse p8;
+        System.out.println("Resend put value 1");
+        try {
+            p8 = sendAndReceiveSingleServerResponse(p6s);
+        } catch (Exception e) {
+            return handleException(e);
+        }
+
+        if(p8.getErrCode() != RES_CODE_SUCCESS){
+            System.out.println("PUT failed with error code: " + p8.getErrCode());
+            return TEST_FAILED;
+        }
+
+        System.out.println("Getting value 2");
+        ServerResponse g1;
+        try {
+            g1 = get(key);
+        } catch (Exception e) {
+            return handleException(e);
+        }
+
+        if(g1.getErrCode() != RES_CODE_SUCCESS){
+            System.out.println("GET did not return no key. Error Code:" + g1.getErrCode());
+            return TEST_FAILED;
+        }
+
+        if(!Arrays.equals(val1, g1.getValue()) || v1 != g1.getVersion()) {
+            System.out.println("Expected old value: " + val1 + ", Actual: " + g1.getValue());
+            return TEST_FAILED;
+        }
+
+        System.out.println("*** PART 4 PASS ***");
+        return TEST_PASSED;
+    }
+
+    public int invalidCommandTest() throws IOException {
+        System.out.println("Testing invalid command");
+        UnwrappedPayload pl = new UnwrappedPayload();
+        pl.setCommand(0x69);
+
+        ServerResponse i;
+
+        try {
+            i = sendAndReceiveServerResponse(pl);
+        } catch (Exception e) {
+            return handleException(e);
+        }
+
+        if (i.getErrCode() != RES_CODE_INVALID_OPCODE) {
+            System.out.println("Invalid cmd did not return invalid. Error Code:" + i.getErrCode());
+            return TEST_FAILED;
+        }
+
+        System.out.println("*** TEST PASSED ***");
         return TEST_PASSED;
     }
 
@@ -506,7 +914,6 @@ public class KVClient implements Callable<Integer> {
         System.out.println("***PASSED***");
         return TEST_PASSED;
     }
-
     public int administrationTest() throws IOException {
         System.out.println("Administration Test. PID -> ALI -> MEM -> SHU -> ALI");
 
@@ -684,11 +1091,7 @@ public class KVClient implements Callable<Integer> {
         ServerResponse res;
 
         UnwrappedMessage msg = generateMessage(pl);
-        byte[] msgb = KVMsgSerializer.serialize(msg);
-        DatagramPacket p = new DatagramPacket(msgb, msgb.length, serverAddress, serverPort);
-
-        socket.send(p);
-        res = receiveSingleServerResponse(msg);
+        res = sendAndReceiveSingleServerResponse(msg);
 
        /* Send a new packet after overload time*/
         while(res.getErrCode() == RES_CODE_OVERLOAD){
@@ -696,10 +1099,7 @@ public class KVClient implements Callable<Integer> {
             Thread.sleep(res.getOverloadWaitTime());
 
             msg = generateMessage(pl);
-            msgb = KVMsgSerializer.serialize(msg);
-            p = new DatagramPacket(msgb, msgb.length, serverAddress, serverPort);
-            socket.send(p);
-            res = receiveSingleServerResponse(msg);
+            res = sendAndReceiveSingleServerResponse(msg);
         }
 
         return res;
@@ -745,15 +1145,22 @@ public class KVClient implements Callable<Integer> {
         return msg;
     }
 
-    ServerResponse receiveSingleServerResponse(UnwrappedMessage req) throws ServerTimedOutException, IOException {
+    ServerResponse sendAndReceiveSingleServerResponse(UnwrappedMessage req) throws ServerTimedOutException, IOException {
         DatagramPacket rP = new DatagramPacket(publicBuf, publicBuf.length);
 
         int tries = 0;
         boolean success = false;
 
+        byte[] msgb = KVMsgSerializer.serialize(req);
+        DatagramPacket p = new DatagramPacket(msgb, msgb.length, serverAddress, serverPort);
+        int initTimeout = socket.getSoTimeout();
+
+        messageOnWire = req;
+
         UnwrappedMessage res = null;
         while (tries < 3 && !success)
         {
+            socket.send(p);
             try {
                 socket.receive(rP);
             } catch (SocketTimeoutException e) {
@@ -783,8 +1190,10 @@ public class KVClient implements Callable<Integer> {
 
             success = msgIDMatch && crc32Match;
             tries++;
+            socket.setSoTimeout(socket.getSoTimeout() * 2);
         }
 
+        socket.setSoTimeout(initTimeout);
 
         if(tries == 3 && !success) {
             System.out.println("Did not receive response after 3 tries");

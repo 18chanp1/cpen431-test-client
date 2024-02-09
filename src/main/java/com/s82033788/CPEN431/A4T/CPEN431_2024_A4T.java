@@ -6,6 +6,8 @@ import java.net.DatagramSocket;
 import java.net.InetAddress;
 
 public class CPEN431_2024_A4T {
+    public final static String address = "127.0.0.1";
+    public final static int port = 13788;
     public static void main (String[] args)
     {
         try {
@@ -15,8 +17,8 @@ public class CPEN431_2024_A4T {
             System.out.println("Starting Paco's Test Client");
 
             KVClient cl = new KVClient(
-                    InetAddress.getByName("127.0.0.1"),
-                    13788,
+                    InetAddress.getByName(address),
+                    port,
                     new DatagramSocket(),
                     new byte[16384]
             );
